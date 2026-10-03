@@ -3,6 +3,9 @@ import pendulum
 from datetime import datetime,timedelta
 from api.video_stats import extract_video_data, get_playlist_id, get_video_ids, save_to_json
 
+from datawarehouse.dwh import staging_table, core_table
+from dataquality.soda import yt_elt_data_quality
+
 local_tz = pendulum.timezone("Asia/Kolkata")
 
 default_args = {
@@ -19,11 +22,15 @@ default_args = {
     # "end_date": pendulum.datetime(2030, 8, 30, tz=local_tz),
 }
 
+# Variables
+staging_schema = "staging"
+core_schema = "core"
+
 with DAG(
     dag_id='produce_json',
     default_args=default_args,
     description='DAG to produce JSON file with raw data',
-    schedule='30 21 * * *',  # Run every day at 21:30 IST (Asia/Kolkata)
+    schedule='0 21 * * *',  # Run every day at 21:00 IST (Asia/Kolkata)
     catchup=False,
 ) as dag: 
     # Define tasks
@@ -34,4 +41,32 @@ with DAG(
 
     # Define dependencies
     playlist_id >> video_ids >> extract_data >> save_to_json_task
-    
+
+with DAG(
+    dag_id='update_db',
+    default_args=default_args,
+    description='DAG to process JSON file and insert data into both staging and core schema',
+    schedule='0 22 * * *',  # Run every day at 22:00 IST (Asia/Kolkata)
+    catchup=False,
+) as dag: 
+    # Define tasks
+    update_staging = staging_table()
+    update_core = core_table()
+
+    # Define dependencies
+    update_staging >> update_core
+
+with DAG(
+    dag_id='data_quality',
+    default_args=default_args,
+    description='DAG to check the data quality on both layers in the db',
+    schedule='0 23 * * *',  # Run every day at 23:00 IST (Asia/Kolkata)
+    catchup=False,
+) as dag: 
+    # Define tasks
+    soda_validate_staging = yt_elt_data_quality(staging_schema)
+    soda_validate_core = yt_elt_data_quality(core_schema)
+
+    # Define dependencies
+    soda_validate_staging >> soda_validate_core
+ 
